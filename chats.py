@@ -165,7 +165,11 @@ async def main():
         print(f"Найдено ссылок: {len(links)}")
         
         all_peers = []
+        num = 0
         for link in links:
+            if num >=30:
+                print("Достигнут лимит в 30 вступлений за сессию.")
+                await asyncio.sleep(random.randint(300, 600)) 
             try:
                 # Получаем объект чата
                 entity = await client.get_entity(link)
@@ -175,19 +179,21 @@ async def main():
                     try:
                         await client(functions.channels.JoinChannelRequest(channel=entity))
                         print(f"[+] Вступил в: {link}")
+                        wait_time = random.randint(22, 47)
                     except Exception as e:
                         print(f"[-] Пропуск (уже в чате или ошибка): {link}")
-                
+                        wait_time = 0
                 # Сохраняем для папок
                 all_peers.append(await client.get_input_entity(entity))
                 
                 # ТВОЯ ЗАДЕРЖКА: от 22 до 47 секунд
-                wait_time = random.randint(22, 47)
+               
                 print(f"Сплю {wait_time} сек...")
                 await asyncio.sleep(wait_time) 
                 
             except Exception as e:
                 print(f"[!] Ошибка с {link}: {e}")
+            num += 1
 
         # 2. Распределение по папкам "Рассылка"
         print("\nРаскидываю чаты по папкам...")
