@@ -140,96 +140,130 @@
 
 # if __name__ == '__main__':
 #     asyncio.run(main())
-
 import asyncio
 import random
+import os
+import time
 from telethon import TelegramClient, functions, types
+from telethon.errors import FloodWaitError, UsernameInvalidError, ChannelPrivateError
 
-# Твои данные (аккаунт Ася)
+# Данные те же
 api_id = 33574840
 api_hash = 'b8639fd38e1db0e49bd26c3dcaceb026'
 
+def remove_link_from_file(file_path, link_to_remove):
+    if not os.path.exists(file_path): return
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    with open(file_path, "w", encoding="utf-8") as f:
+        for line in lines:
+            clean = line.strip().replace('https://t.me/', '').replace('t.me/', '').replace('@', '')
+            if clean != link_to_remove:
+                f.write(line)
+
+async def sync_archive_to_folders(client):
+    print("\n📦 [АРХИВАТОР] Синхронизация...")
+    try:
+        dialogs = await client.get_dialogs()
+        archived_peers = [d.entity for d in dialogs if d.folder_id == 1 and isinstance(d.entity, (types.Chat, types.Channel))]
+        if not archived_peers: return
+        
+        result = await client(functions.messages.GetDialogFiltersRequest())
+        for f in result.filters:
+            if isinstance(f, types.DialogFilter) and f.title != "SNIPER MODE":
+                current_peers = list(f.include_peers)
+                added = 0
+                for entity in archived_peers:
+                    peer = await client.get_input_entity(entity)
+                    if len(current_peers) < 200 and peer not in current_peers:
+                        current_peers.append(peer)
+                        added += 1
+                if added > 0:
+                    f.include_peers = current_peers
+                    await client(functions.messages.UpdateDialogFilterRequest(id=f.id, filter=f))
+    except Exception as e:
+        print(f"❌ Ошибка архиватора: {e}")
+
 async def main():
-    # Используем сессию resends2
-    async with TelegramClient('resends2', api_id, api_hash) as client:
-        print("--- ЗАПУСК: ВСТУПЛЕНИЕ + ЗАПОЛНЕНИЕ ПАПОК ---")
-        
-        # 1. Читаем список чатов
+    # ИСПОЛЬЗУЕМ ОТДЕЛЬНУЮ СЕССИЮ
+    client = TelegramClient('joiner_session', api_id, api_hash)
+    
+    await client.start() # Тут он спросит номер телефона и код в консоли!
+    
+    print("--- ВСТУПАЛЬЩИК ЗАПУЩЕН ---")
+    file_path = "my_chats_backup.txt"
+    total_added = 0
+    session_limit = 0
+
+    while True:
+        if not os.path.exists(file_path):
+            print("Файл не найден.")
+            break
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            links = [line.strip().replace('https://t.me/', '').replace('t.me/', '').replace('@', '') for line in f if line.strip()]
+
+        if not links:
+            print("🏁 Ссылки кончились!")
+            break
+
+        current_link = links[0]
         try:
-            with open("my_chats_backup.txt", "r", encoding="utf-8") as f:
-                links = [line.strip().replace('t.me/', '').replace('@', '') for line in f if line.strip()]
-        except FileNotFoundError:
-            print("[!] Ошибка: Файл my_chats_backup.txt не найден!")
-            return
+            entity = await client.get_entity(current_link)
+            
+            # Проверка на группу
+            if not (isinstance(entity, types.Chat) or (isinstance(entity, types.Channel) and entity.megagroup)):
+                print(f"🚫 {current_link} - не группа.")
+                remove_link_from_file(file_path, current_link)
+                continue
 
-        print(f"Найдено ссылок: {len(links)}")
-        
-        all_peers = []
-        num = 0
-        for link in links:
-            if num >=30:
-                print("Достигнут лимит в 30 вступлений за сессию.")
-                await asyncio.sleep(random.randint(300, 600)) 
+            # Проверка участников
+            full = await client(functions.channels.GetFullChannelRequest(channel=entity))
+            count = full.full_chat.participants_count
+            if count < 150:
+                print(f"📉 Мало людей ({count}) в {current_link}")
+                remove_link_from_file(file_path, current_link)
+                continue
+
+            # Вступление
+            await client(functions.channels.JoinChannelRequest(channel=entity))
+            print(f"✅ Вступил: {current_link} ({count} чел.)")
+            
+            total_added += 1
+            session_limit += 1
+
+            # Добавление в папки
             try:
-                # Получаем объект чата
-                entity = await client.get_entity(link)
-                
-                # Вступаем, если это канал или супергруппа
-                if isinstance(entity, (types.Chat, types.Channel)):
-                    try:
-                        await client(functions.channels.JoinChannelRequest(channel=entity))
-                        print(f"[+] Вступил в: {link}")
-                        wait_time = random.randint(22, 47)
-                    except Exception as e:
-                        print(f"[-] Пропуск (уже в чате или ошибка): {link}")
-                        wait_time = 0
-                # Сохраняем для папок
-                all_peers.append(await client.get_input_entity(entity))
-                
-                # ТВОЯ ЗАДЕРЖКА: от 22 до 47 секунд
-               
-                print(f"Сплю {wait_time} сек...")
-                await asyncio.sleep(wait_time) 
-                
-            except Exception as e:
-                print(f"[!] Ошибка с {link}: {e}")
-            num += 1
+                res = await client(functions.messages.GetDialogFiltersRequest())
+                for f in res.filters:
+                    if isinstance(f, types.DialogFilter):
+                        peers = list(f.include_peers)
+                        inp = await client.get_input_entity(entity)
+                        if inp not in peers and len(peers) < 200:
+                            peers.append(inp)
+                            f.include_peers = peers
+                            await client(functions.messages.UpdateDialogFilterRequest(id=f.id, filter=f))
+            except: pass
 
-        # 2. Распределение по папкам "Рассылка"
-        print("\nРаскидываю чаты по папкам...")
-        current_filters = await client(functions.messages.GetDialogFiltersRequest())
-        
-        # Ищем твои папки
-        target_folders = [f for f in current_filters.filters if hasattr(f, 'title')]
-        
-        if not target_folders:
-            print("[!] Ошибка: Создай сначала пустые папки в Telegram!")
-            return
+            remove_link_from_file(file_path, current_link)
 
-        # Лимит 100 чатов на папку
-        chunk_size = 100
-        for i, folder in enumerate(target_folders):
-            start = i * chunk_size
-            end = start + chunk_size
-            chunk = all_peers[start:end]
-            
-            if not chunk:
-                break
-                
-            print(f"Заполняю папку '{folder.title.text}' (чатов: {len(chunk)})")
-            
-            new_filter = types.DialogFilter(
-                id=folder.id,
-                title=folder.title,
-                include_peers=chunk, #
-                pinned_peers=[],
-                exclude_peers=[]
-            )
-            
-            await client(functions.messages.UpdateDialogFilterRequest(id=folder.id, filter=new_filter))
-            print(f"Готово: {folder.title.text}")
+            if session_limit >= 45:
+                print("☕ ПЕРЕРЫВ 20 МИН")
+                await sync_archive_to_folders(client)
+                await asyncio.sleep(1200)
+                session_limit = 0
 
-        print("\n--- ВСЕ ЗАДАНИЯ ВЫПОЛНЕНЫ ---")
+            wait = random.randint(60, 100)
+            print(f"⏳ Ждем {wait} сек...")
+            await asyncio.sleep(wait)
+
+        except FloodWaitError as e:
+            print(f"🛑 Флуд на {e.seconds} сек")
+            await asyncio.sleep(e.seconds + 10)
+        except Exception as e:
+            print(f"❌ Ошибка на {current_link}: {e}")
+            remove_link_from_file(file_path, current_link)
+            await asyncio.sleep(5)
 
 if __name__ == '__main__':
     asyncio.run(main())
