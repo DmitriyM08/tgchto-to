@@ -11,4 +11,8 @@ data_account = [
         "api_code": "39200729",
         "api_hash": "fca93651288f087718e1d94acb78c384"
     }
+<<<<<<< HEAD
 ]
+=======
+]
+>>>>>>> 644c1f1b72dfc46f322d6f28d57defa9865999c1
